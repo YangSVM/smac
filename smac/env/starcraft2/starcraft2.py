@@ -2,6 +2,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from numpy.lib.arraysetops import isin
+
 from smac.env.multiagentenv import MultiAgentEnv
 from smac.env.starcraft2.maps import get_map_params
 
@@ -88,6 +90,7 @@ class StarCraft2Env(MultiAgentEnv):
         reward_negative_scale=0.5,
         reward_scale=True,
         reward_scale_rate=20,
+        reward_multi_task=False,
         replay_dir="",
         replay_prefix="",
         window_size_x=1920,
@@ -226,6 +229,7 @@ class StarCraft2Env(MultiAgentEnv):
         self.reward_defeat = reward_defeat
         self.reward_scale = reward_scale
         self.reward_scale_rate = reward_scale_rate
+        self.use_reward_multi_task = reward_multi_task
 
         # Other
         self.game_version = game_version
@@ -446,7 +450,12 @@ class StarCraft2Env(MultiAgentEnv):
         game_end_code = self.update_units()
 
         terminated = False
-        reward = self.reward_battle()
+        
+        if self.use_reward_multi_task:
+            reward = self.reward_multi_task()
+        else:
+            reward = self.reward_battle()
+
         info = {"battle_won": False}
 
         # count units that are still alive
@@ -476,7 +485,11 @@ class StarCraft2Env(MultiAgentEnv):
             elif game_end_code == -1 and not self.defeat_counted:
                 self.defeat_counted = True
                 if not self.reward_sparse:
-                    reward += self.reward_defeat
+                    if isinstance(reward, list):
+                        for i_reward in range(len(reward)):
+                            reward[i_reward] += self.reward_defeat
+                    else:
+                        reward += self.reward_defeat
                 else:
                     reward = -1
 
@@ -495,7 +508,11 @@ class StarCraft2Env(MultiAgentEnv):
             self._episode_count += 1
 
         if self.reward_scale:
-            reward /= self.max_reward / self.reward_scale_rate
+            if isinstance(reward, list):
+                for i_reward in range(len(reward)):
+                    reward[i_reward] /= self.max_reward / self.reward_scale_rate
+            else:
+                reward /= self.max_reward / self.reward_scale_rate
 
         return reward, terminated, info
 
@@ -747,6 +764,80 @@ class StarCraft2Env(MultiAgentEnv):
             reward = delta_enemy + delta_deaths - delta_ally
 
         return reward
+    
+    def reward_multi_task(self):
+        """Reward function when self.reward_spare==False.
+        Returns accumulative hit/shield point damage dealt to the enemy
+        + reward_death_value per enemy unit killed, and, in case
+        self.reward_only_positive == False, - (damage dealt to ally units
+        + reward_death_value per ally unit killed) * self.reward_negative_scale.
+        Sorted the enemies reward by health.
+        """
+        if self.reward_sparse:
+            return 0
+
+        delta_deaths = 0
+        delta_ally = 0
+        delta_enemy = 0
+
+        neg_scale = self.reward_negative_scale
+
+        # update deaths
+        # for al_id, al_unit in self.agents.items():
+        #     if not self.death_tracker_ally[al_id]:
+        #         # did not die so far
+        #         prev_health = (
+        #             self.previous_ally_units[al_id].health
+        #             + self.previous_ally_units[al_id].shield
+        #         )
+        #         if al_unit.health == 0:
+        #             # just died
+        #             self.death_tracker_ally[al_id] = 1
+        #             if not self.reward_only_positive:
+        #                 delta_deaths -= self.reward_death_value * neg_scale
+        #             delta_ally += prev_health * neg_scale
+        #         else:
+        #             # still alive
+        #             delta_ally += neg_scale * (
+        #                 prev_health - al_unit.health - al_unit.shield
+        #             )
+        
+        enemy_rewards = {}
+        enemy_health = {}
+        for e_id, e_unit in self.enemies.items():
+            if not self.death_tracker_enemy[e_id]:
+                prev_health = (
+                    self.previous_enemy_units[e_id].health
+                    + self.previous_enemy_units[e_id].shield
+                )
+                enemy_health[e_id] = e_unit.health 
+
+                if e_unit.health == 0:
+                    self.death_tracker_enemy[e_id] = 1
+                    delta_deaths = self.reward_death_value
+                    delta_enemy = prev_health
+                    # if just dead. the reward will be kill reward and decreasement in health and shield
+                    enemy_rewards[e_id] = abs(self.reward_death_value) + abs(prev_health)
+
+                else:
+                    delta_enemy = prev_health - e_unit.health - e_unit.shield
+                    # not dead. the reward will be decreasement in health and shield
+                    enemy_rewards[e_id] = abs(delta_enemy)
+            else:
+                # already dead enemy
+                enemy_rewards[e_id] = 0
+                enemy_health[e_id] = float("inf")
+
+        # if self.reward_only_positive:
+        #     reward = abs(delta_enemy + delta_deaths)  # shield regeneration
+        # else:
+        #     reward = delta_enemy + delta_deaths - delta_ally
+
+        # reward sorted: according to the task. assgin the rewards
+        sort_orders = sorted(enemy_rewards.items(), key=lambda x: x[0], reverse=True)
+        rewards = [enemy_rewards[e_id[0]] for e_id in sort_orders]
+        rewards = rewards[::-1]
+        return rewards
 
     def get_total_actions(self):
         """Returns the total number of actions an agent could ever take."""
