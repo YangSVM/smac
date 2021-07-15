@@ -230,6 +230,7 @@ class StarCraft2Env(MultiAgentEnv):
         self.reward_scale = reward_scale
         self.reward_scale_rate = reward_scale_rate
         self.use_reward_multi_task = reward_multi_task
+        self.n_tasks = self.n_enemies
 
         # Other
         self.game_version = game_version
@@ -441,7 +442,10 @@ class StarCraft2Env(MultiAgentEnv):
             self._obs = self._controller.observe()
         except (protocol.ProtocolError, protocol.ConnectionError):
             self.full_restart()
-            return 0, True, {}
+            if self.use_reward_multi_task:
+                return [0]*len(self.enemies), True, {}
+            else:
+                return 0, True, {}
 
         self._total_steps += 1
         self._episode_steps += 1
@@ -479,9 +483,17 @@ class StarCraft2Env(MultiAgentEnv):
                 self.win_counted = True
                 info["battle_won"] = True
                 if not self.reward_sparse:
-                    reward += self.reward_win
+                    if isinstance(reward, list):
+                        for i_reward in range(len(reward)):
+                            reward[i_reward] += self.reward_win
+                    else:
+                        reward += self.reward_win
                 else:
-                    reward = 1
+                    if self.reward_multi_task:
+                        reward = [1] * self.n_tasks
+                    else:
+                        reward = 1
+
             elif game_end_code == -1 and not self.defeat_counted:
                 self.defeat_counted = True
                 if not self.reward_sparse:
@@ -491,7 +503,10 @@ class StarCraft2Env(MultiAgentEnv):
                     else:
                         reward += self.reward_defeat
                 else:
-                    reward = -1
+                    if self.reward_multi_task:
+                        reward = [-1] * self.n_tasks
+                    else:
+                        reward = -1
 
         elif self._episode_steps >= self.episode_limit:
             # Episode limit reached
