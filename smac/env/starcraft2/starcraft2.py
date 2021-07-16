@@ -443,7 +443,7 @@ class StarCraft2Env(MultiAgentEnv):
         except (protocol.ProtocolError, protocol.ConnectionError):
             self.full_restart()
             if self.use_reward_multi_task:
-                return [0]*len(self.enemies), True, {}
+                return [0]*len(self.n_tasks), True, {}
             else:
                 return 0, True, {}
 
@@ -485,7 +485,7 @@ class StarCraft2Env(MultiAgentEnv):
                 if not self.reward_sparse:
                     if isinstance(reward, list):
                         for i_reward in range(len(reward)):
-                            reward[i_reward] += self.reward_win
+                            reward[i_reward] += (self.reward_win)/self.n_tasks
                     else:
                         reward += self.reward_win
                 else:
@@ -852,6 +852,8 @@ class StarCraft2Env(MultiAgentEnv):
         sort_orders = sorted(enemy_rewards.items(), key=lambda x: x[0], reverse=True)
         rewards = [enemy_rewards[e_id[0]] for e_id in sort_orders]
         rewards = rewards[::-1]
+        reward_original = self.reward_battle()
+        assert sum(rewards) == reward_original
         return rewards
 
     def get_total_actions(self):
