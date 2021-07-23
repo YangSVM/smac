@@ -90,7 +90,7 @@ class StarCraft2Env(MultiAgentEnv):
         reward_negative_scale=0.5,
         reward_scale=True,
         reward_scale_rate=20,
-        reward_multi_task=False,
+        reward_task_dec_type= '',
         replay_dir="",
         replay_prefix="",
         window_size_x=1920,
@@ -229,8 +229,9 @@ class StarCraft2Env(MultiAgentEnv):
         self.reward_defeat = reward_defeat
         self.reward_scale = reward_scale
         self.reward_scale_rate = reward_scale_rate
-        self.use_reward_multi_task = reward_multi_task
-        self.n_tasks = self.n_enemies
+        self.n_tasks = -1
+        self.reward_task_dec_type = reward_task_dec_type
+        self.reward_assign = []
 
         # Other
         self.game_version = game_version
@@ -358,6 +359,51 @@ class StarCraft2Env(MultiAgentEnv):
             np.transpose(np.array(list(map_info.terrain_height.data))
                 .reshape(self.map_x, self.map_y)), 1) / 255
 
+    def calculat_task_reward_assgin(self):
+        ''' 
+        Params:
+            self.reward_task_dec_type. 'n_enemy'
+        Returns:
+            self.n_tasks
+            self.reward_assign
+        
+        '''
+        enemy_feats_size = self.get_obs_enemy_feats_size()
+        n_enemy =  enemy_feats_size[0]
+
+        if self.reward_task_dec_type == 'n_enemy':
+            self.n_tasks =n_enemy            
+            for i in range(self.n_tasks):
+                self.reward_assign.append([i])
+
+        elif self.reward_task_dec_type.find('equal') > -1:
+            # equally . example: 'equal_5', n_tasks = 5
+            self.n_tasks = int(self.reward_task_dec_type[6:])
+            mod = n_enemy % self.n_tasks
+            if mod == 0:
+                n_reward_per_task = n_enemy // self.n_tasks
+            else:
+                n_reward_per_task = n_enemy // self.n_tasks +1
+            for i in range(self.n_tasks -1):
+                self.reward_assign.append([i*n_reward_per_task +x for x in range(n_reward_per_task)])
+            last_reward_start = (self.n_tasks -1)*n_reward_per_task
+            self.reward_assign.append([x for x in range(last_reward_start, n_enemy)])
+        elif self.reward_task_dec_type == 'unit_type':
+            unit_reward = {}
+            for i_enemy in range(n_enemy):
+                unit_type= self.enemies[i_enemy].unit_type
+                if unit_type not in unit_reward.keys():
+                    unit_reward[unit_type] = [i_enemy]
+                else:
+                    unit_reward[unit_type] = unit_reward[unit_type].append(i_enemy)
+            self.reward_assign = [x for x in unit_reward.values()]
+            self.n_tasks = len(unit_reward)
+        elif self.reward_task_dec_type == '':
+            self.n_tasks = 1
+            self.reward_assign = [[x for x in range(n_enemy)]]
+        else:
+            logging.error('reward_task_dec_type not found!')
+
     def reset(self):
         """Reset the environment. Required after each full episode.
         Returns initial observations and states.
@@ -391,6 +437,9 @@ class StarCraft2Env(MultiAgentEnv):
         if self.debug:
             logging.debug("Started Episode {}"
                           .format(self._episode_count).center(60, "*"))
+
+        # before reset ending. calculate the multi-task reward assignment
+        self.calculat_task_reward_assgin()
 
         return self.get_obs(), self.get_state()
 
@@ -442,7 +491,7 @@ class StarCraft2Env(MultiAgentEnv):
             self._obs = self._controller.observe()
         except (protocol.ProtocolError, protocol.ConnectionError):
             self.full_restart()
-            if self.use_reward_multi_task:
+            if self.n_tasks > 1:
                 return [0]*self.n_tasks, True, {}
             else:
                 return 0, True, {}
@@ -455,10 +504,8 @@ class StarCraft2Env(MultiAgentEnv):
 
         terminated = False
         
-        if self.use_reward_multi_task:
-            reward = self.reward_multi_task()
-        else:
-            reward = self.reward_battle()
+        reward = self.reward_multi_task()
+
 
         info = {"battle_won": False}
 
@@ -489,7 +536,7 @@ class StarCraft2Env(MultiAgentEnv):
                     else:
                         reward += self.reward_win
                 else:
-                    if self.reward_multi_task:
+                    if self.n_tasks > 1:
                         reward = [1] * self.n_tasks
                     else:
                         reward = 1
@@ -499,11 +546,11 @@ class StarCraft2Env(MultiAgentEnv):
                 if not self.reward_sparse:
                     if isinstance(reward, list):
                         for i_reward in range(len(reward)):
-                            reward[i_reward] += self.reward_defeat
+                            reward[i_reward] += self.reward_defeat/self.n_tasks
                     else:
                         reward += self.reward_defeat
                 else:
-                    if self.reward_multi_task:
+                    if self.n_tasks > 1:
                         reward = [-1] * self.n_tasks
                     else:
                         reward = -1
@@ -852,9 +899,16 @@ class StarCraft2Env(MultiAgentEnv):
         sort_orders = sorted(enemy_rewards.items(), key=lambda x: x[0], reverse=True)
         rewards = [enemy_rewards[e_id[0]] for e_id in sort_orders]
         rewards = rewards[::-1]
-        # reward_original = self.reward_battle()
-        # assert sum(rewards) == reward_original
-        return rewards
+
+        # rewards assignment:
+        reward_assigned = []
+        for i in range(self.n_tasks):
+            reward_assigned_i = 0
+            for assign in self.reward_assign[i]:
+                reward_assigned_i += rewards[assign]
+            reward_assigned.append(reward_assigned_i)
+
+        return reward_assigned
 
     def get_total_actions(self):
         """Returns the total number of actions an agent could ever take."""
