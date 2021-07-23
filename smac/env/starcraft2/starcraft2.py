@@ -395,7 +395,7 @@ class StarCraft2Env(MultiAgentEnv):
                 if unit_type not in unit_reward.keys():
                     unit_reward[unit_type] = [i_enemy]
                 else:
-                    unit_reward[unit_type] = unit_reward[unit_type].append(i_enemy)
+                    unit_reward[unit_type].append(i_enemy)
             self.reward_assign = [x for x in unit_reward.values()]
             self.n_tasks = len(unit_reward)
         elif self.reward_task_dec_type == '':
