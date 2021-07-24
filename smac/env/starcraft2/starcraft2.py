@@ -258,9 +258,9 @@ class StarCraft2Env(MultiAgentEnv):
         self.map_type = map_params["map_type"]
         self._unit_types = None
 
-        self.max_reward = (
-            self.n_enemies * self.reward_death_value + self.reward_win
-        )
+        self.max_reward =  (
+                    self.n_enemies * self.reward_death_value + self.reward_win
+                )
 
         # create lists containing the names of attributes returned in states
         self.ally_state_attr_names = ['health', 'energy/cooldown', 'rel_x', 'rel_y']
@@ -403,6 +403,10 @@ class StarCraft2Env(MultiAgentEnv):
             self.reward_assign = [[x for x in range(n_enemy)]]
         else:
             logging.error('reward_task_dec_type not found!')
+
+    def reset4get_args(self):
+        self.reset()
+        self._episode_count += 1
 
     def reset(self):
         """Reset the environment. Required after each full episode.
@@ -1589,6 +1593,7 @@ class StarCraft2Env(MultiAgentEnv):
                             self.agents[i].pos.y,
                         )
                     )
+
 
             for unit in self._obs.observation.raw_data.units:
                 if unit.owner == 2:
